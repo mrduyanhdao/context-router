@@ -32,9 +32,33 @@ version.
 - No behavior change to existing `index`, `search`, `task-search`, `shadow`
   outputs beyond the documented cleanup internals.
 
-## 1. Cleanup of `scripts/context_router.py`
+## 1. Module split and cleanup of `scripts/`
 
-Behavior-preserving, verified by the existing suite:
+`context_router.py` is split into three files (requested): the CLI entry path
+`scripts/context_router.py` stays the documented entry point, so all existing
+command examples keep working.
+
+- `scripts/context_router.py` — core, remote-free: indexing/chunking, `search`,
+  `related_tasks`, the new `start`/`check`/`packet` implementations, the `.env`
+  loader (`load_env_file`), JSONL I/O, `main()` (thin: parse args via
+  `parser.py`, dispatch). Imports `shadow` only lazily inside the `shadow`
+  dispatch branch, so `index`/`search` never load remote code.
+- `scripts/shadow.py` — everything Jev: `MODEL`, `POLICY_VERSION`, `ENDPOINT`,
+  `QUESTIONS`, `THRESHOLDS`, `_NoRedirectHandler`, `_cache_key`, `_ask_jev`,
+  `_validate_evaluation`, `_route`, `shadow()`. Imports `search`, `read_jsonl`,
+  `write_jsonl` one-way from `context_router`; nothing in core imports shadow
+  at module level.
+- `scripts/parser.py` — `build_parser()` constructing every subcommand
+  (including `shadow`'s flags, which move here) and the `run(args)` dispatch
+  table that maps parsed args to core/shadow calls with keyword arguments.
+  `context_router.main()` delegates to it.
+
+Both new modules are plain scripts-dir imports (`import shadow`, `import
+parser`) — valid because the CLI always runs from `scripts/`, and the
+installer already copies every file under `scripts/`. Tests are updated to
+import from the new modules; the suite stays green.
+
+Behavior-preserving cleanup within the same change:
 
 - `_kind`: remove unreachable branches; `.json/.jsonc` resolve to `data`,
   `.yaml/.yml` stay `configuration`; document the precedence.
@@ -42,7 +66,6 @@ Behavior-preserving, verified by the existing suite:
   TEXT_SUFFIXES and name not in ROOT_FILES)`).
 - `search`: extract per-record validation into `_validate_record(record)` called
   once before scoring, not inside the ranking loop.
-- `main`: dispatch `shadow` with keyword arguments.
 - Keep per-candidate cache writes in `shadow` for crash resumability.
 
 ## 2. `.env` contract
