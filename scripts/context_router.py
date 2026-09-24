@@ -118,7 +118,7 @@ def _files(project: Path, roots: list[Path]) -> list[Path]:
         candidates = [root] if root.is_file() else root.rglob("*")
         for path in candidates:
             _check_no_symlink(project, path)
-            if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES and path.name not in ROOT_FILES:
+            if not path.is_file() or (path.suffix.lower() not in TEXT_SUFFIXES and path.name not in ROOT_FILES):
                 continue
             resolved = path.resolve()
             if not _inside(project, resolved):
@@ -129,17 +129,17 @@ def _files(project: Path, roots: list[Path]) -> list[Path]:
 
 
 def _kind(path: Path) -> str:
-    if path.suffix.lower() == ".md":
+    suffix = path.suffix.lower()
+    if suffix == ".md":
         return "markdown"
-    if path.suffix.lower() in {
-        ".gd", ".cs", ".gdshader", ".go", ".java", ".js", ".jsx", ".kt", ".php",
-        ".py", ".rb", ".rs", ".sh", ".ts", ".tsx",
-    }:
-        return "code"
-    if path.suffix.lower() in {".tscn", ".tres", ".cfg", ".ini", ".toml", ".yaml", ".yml"} or path.name in {"project.godot", "package.json"}:
+    if path.name in {"project.godot", "package.json"}:
         return "configuration"
-    if path.suffix.lower() in {".json", ".jsonc", ".yaml", ".yml"}:
+    if suffix == ".json" or suffix == ".jsonc":
         return "data"
+    if suffix in {".cfg", ".ini", ".toml", ".yaml", ".yml", ".tscn", ".tres"}:
+        return "configuration"
+    if suffix in {".gd", ".cs", ".gdshader", ".go", ".java", ".js", ".jsx", ".kt", ".php", ".py", ".rb", ".rs", ".sh", ".ts", ".tsx"}:
+        return "code"
     return "text"
 
 
@@ -311,31 +311,35 @@ def _terms(value: str) -> set[str]:
     return {term for term in TOKEN.findall(value.lower()) if len(term) > 1 and term not in STOP_WORDS}
 
 
+def _validate_record(record: dict) -> None:
+    required = {
+        "id": str,
+        "path": str,
+        "kind": str,
+        "line_start": int,
+        "line_end": int,
+        "content_hash": str,
+        "text": str,
+    }
+    if any(not isinstance(record.get(key), expected) for key, expected in required.items()):
+        raise ValueError("Context index contains a malformed record")
+    if not isinstance(record.get("heading", ""), str):
+        raise ValueError("Context index contains a malformed heading")
+
+
 def search(records: list[dict], query: str, limit: int = 20, task_records_only: bool = False) -> list[dict]:
     query_terms = _terms(query)
     if not query_terms or limit < 1:
         return []
     ranked = []
     for record in records:
+        _validate_record(record)
         if task_records_only and record.get("task_record") is not True:
             continue
         if not task_records_only and record.get("task_record") is True:
             continue
-        required = {
-            "id": str,
-            "path": str,
-            "kind": str,
-            "line_start": int,
-            "line_end": int,
-            "content_hash": str,
-            "text": str,
-        }
-        if any(not isinstance(record.get(key), expected) for key, expected in required.items()):
-            raise ValueError("Context index contains a malformed record")
         path_hits = query_terms & _terms(record["path"])
-        heading = record.get("heading", "")
-        if not isinstance(heading, str):
-            raise ValueError("Context index contains a malformed heading")
+        heading = record["heading"]
         heading_hits = query_terms & _terms(heading)
         text_hits = query_terms & _terms(record.get("text", ""))
         score = 3 * len(path_hits) + 2 * len(heading_hits) + len(text_hits)

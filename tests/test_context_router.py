@@ -49,6 +49,26 @@ class ContextRouterTests(unittest.TestCase):
             "# Shop cancellation\n\nPreserve remaining service uses and verify the cancel path.\n"
         )
 
+    def test_kind_mapping_is_unambiguous(self):
+        kinds = {
+            "data.json": router._kind(Path("data.json")),
+            "data.jsonc": router._kind(Path("data.jsonc")),
+            "conf.yaml": router._kind(Path("conf.yaml")),
+            "scene.tscn": router._kind(Path("scene.tscn")),
+            "main.gd": router._kind(Path("main.gd")),
+            "notes.md": router._kind(Path("notes.md")),
+            "package.json": router._kind(Path("package.json")),
+        }
+        self.assertEqual(kinds, {
+            "data.json": "data",
+            "data.jsonc": "data",
+            "conf.yaml": "configuration",
+            "scene.tscn": "configuration",
+            "main.gd": "code",
+            "notes.md": "markdown",
+            "package.json": "configuration",
+        })
+
     def test_index_is_stable_and_search_explains_matches(self):
         first = router.build_index(self.project, chunk_lines=10)
         second = router.build_index(self.project, chunk_lines=10)
