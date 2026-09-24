@@ -66,6 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly consent to sending shortlisted project context to TypeSafe",
     )
 
+    check = subparsers.add_parser(
+        "check", parents=[env_parent], help="Report index staleness against the current tree"
+    )
+    check.add_argument("--project", type=Path, required=True)
+    check.add_argument("--index", type=Path, required=True)
+    check.add_argument("--root", action="append")
+
     start = subparsers.add_parser(
         "start", parents=[env_parent], help="Scaffold the task partition and report prior-task records"
     )
@@ -85,6 +92,8 @@ def _dispatch(args) -> object:
         return core.search(core.read_jsonl(args.index), args.query, args.limit)
     if args.command == "task-search":
         return core.related_tasks(core.read_jsonl(args.index), args.query, args.limit, args.matches_per_task)
+    if args.command == "check":
+        return core.check_staleness(args.project, args.index, args.root)
     if args.command == "start":
         return core.start_partition(args.project, args.task_id, args.index, args.root)
     return shadow.shadow(

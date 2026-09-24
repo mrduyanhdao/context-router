@@ -110,6 +110,30 @@ class ContextRouterTests(unittest.TestCase):
         report = router.start_partition(self.project, "idx-task", index_out=out)
         self.assertEqual(report["index"]["chunks"], len(router.read_jsonl(out)))
 
+    def test_check_detects_added_changed_removed_and_fresh(self):
+        out = self.project / "private-index.jsonl"
+        router.write_jsonl(out, router.build_index(self.project, chunk_lines=10))
+        fresh = router.check_staleness(self.project, out)
+        self.assertFalse(fresh["stale"])
+        self.assertEqual((fresh["added"], fresh["removed"], fresh["changed"]), ([], [], []))
+        (self.project / "survivor/shop/service.gd").write_text("extends Node\n\nfunc cancel_service():\n    remaining_uses = 0\n")
+        new_file = self.project / "know-how/NEW.md"
+        new_file.write_text("# New\n")
+        (self.project / "know-how/ARCHITECTURE.md").unlink()
+        report = router.check_staleness(self.project, out)
+        self.assertTrue(report["stale"])
+        self.assertIn("know-how/NEW.md", report["added"])
+        self.assertIn("know-how/ARCHITECTURE.md", report["removed"])
+        self.assertIn("survivor/shop/service.gd", report["changed"])
+
+    def test_check_with_empty_index_reports_everything_added(self):
+        out = self.project / "empty.jsonl"
+        out.write_text("")
+        report = router.check_staleness(self.project, out)
+        self.assertTrue(report["stale"])
+        self.assertEqual(report["indexed_files"], 0)
+        self.assertTrue(report["added"])
+
     def test_kind_mapping_is_unambiguous(self):
         kinds = {
             "data.json": router._kind(Path("data.json")),

@@ -228,6 +228,33 @@ def _chunks(project: Path, path: Path, chunk_lines: int) -> list[dict]:
     return chunks
 
 
+def check_staleness(project: Path, index_path: Path, roots: list[str] | None = None) -> dict:
+    project = project.resolve()
+    indexed: dict[str, list[str]] = {}
+    for record in read_jsonl(index_path):
+        indexed.setdefault(record["path"], []).append(record["content_hash"])
+    current: dict[str, list[str]] = {}
+    for path in _files(project, _roots(project, roots)):
+        relative = path.relative_to(project).as_posix()
+        current[relative] = [
+            hashlib.sha256(chunk["text"].encode()).hexdigest()
+            for chunk in _chunks(project, path, 80)
+        ]
+    added = sorted(set(current) - set(indexed))
+    removed = sorted(set(indexed) - set(current))
+    changed = sorted(
+        path for path in set(indexed) & set(current) if sorted(indexed[path]) != sorted(current[path])
+    )
+    return {
+        "stale": bool(added or removed or changed),
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "indexed_files": len(indexed),
+        "current_files": len(current),
+    }
+
+
 def build_index(project: Path, roots: list[str] | None = None, chunk_lines: int = 80) -> list[dict]:
     project = project.resolve()
     if not project.is_dir():
