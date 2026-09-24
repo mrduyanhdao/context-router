@@ -134,6 +134,26 @@ class ContextRouterTests(unittest.TestCase):
         self.assertEqual(report["indexed_files"], 0)
         self.assertTrue(report["added"])
 
+    def test_packet_assembles_facets_and_prior_tasks_without_network(self):
+        records = router.build_index(self.project, chunk_lines=10)
+        packet = router.build_packet(records, "shop cancellation service use", "tdd", ["survivor/shop"])
+        self.assertEqual(packet["task"], "shop cancellation service use")
+        self.assertEqual(packet["role"], "tdd")
+        self.assertEqual(packet["owned_paths"], ["survivor/shop"])
+        self.assertEqual(packet["acceptance"], [])
+        self.assertTrue(packet["facets"])
+        facet = packet["facets"][0]
+        self.assertEqual(set(facet), {"path", "heading", "line_start", "line_end", "score", "reasons"})
+        self.assertTrue(packet["prior_tasks"])
+        self.assertEqual(packet["prior_tasks"][0]["task_id"], "2026-09-01-shop-cancellation")
+        self.assertNotIn("text", packet["facets"][0])
+        self.assertIn("provenance", packet["provenance_note"].lower())
+
+    def test_packet_on_empty_index_returns_empty_sections(self):
+        packet = router.build_packet([], "anything")
+        self.assertEqual(packet["facets"], [])
+        self.assertEqual(packet["prior_tasks"], [])
+
     def test_kind_mapping_is_unambiguous(self):
         kinds = {
             "data.json": router._kind(Path("data.json")),

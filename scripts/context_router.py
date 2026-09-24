@@ -432,6 +432,44 @@ def start_partition(project: Path, task_id: str, index_out: Path | None = None, 
     }
 
 
+_PROVENANCE_NOTE = (
+    "Record the provenance of each historical constraint: which prior task and artifact "
+    "supplied it. Authoritative repository instructions and live code win conflicts."
+)
+
+
+def build_packet(
+    records: list[dict],
+    task: str,
+    role: str = "coordinator",
+    owned_paths: list[str] | None = None,
+    limit: int = 12,
+    task_limit: int = 8,
+    matches_per_task: int = 3,
+) -> dict:
+    facets = [
+        {
+            "path": match["path"],
+            "heading": match["heading"],
+            "line_start": match["line_start"],
+            "line_end": match["line_end"],
+            "score": match["score"],
+            "reasons": match["reasons"],
+        }
+        for match in search(records, task, limit)
+    ]
+    prior_tasks = related_tasks(records, task, task_limit, matches_per_task)
+    return {
+        "task": task,
+        "role": role,
+        "owned_paths": sorted(owned_paths or []),
+        "acceptance": [],
+        "facets": facets,
+        "prior_tasks": prior_tasks,
+        "provenance_note": _PROVENANCE_NOTE,
+    }
+
+
 def _terms(value: str) -> set[str]:
     return {term for term in TOKEN.findall(value.lower()) if len(term) > 1 and term not in STOP_WORDS}
 

@@ -66,6 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly consent to sending shortlisted project context to TypeSafe",
     )
 
+    packet = subparsers.add_parser(
+        "packet", parents=[env_parent], help="Assemble a worker-packet skeleton from local search"
+    )
+    packet.add_argument("--index", type=Path, required=True)
+    packet.add_argument("--task", required=True)
+    packet.add_argument("--role", default="coordinator")
+    packet.add_argument("--owned-path", action="append", default=[])
+    packet.add_argument("--limit", type=int, default=12)
+    packet.add_argument("--task-limit", type=int, default=8)
+    packet.add_argument("--matches-per-task", type=int, default=3)
+
     check = subparsers.add_parser(
         "check", parents=[env_parent], help="Report index staleness against the current tree"
     )
@@ -92,6 +103,16 @@ def _dispatch(args) -> object:
         return core.search(core.read_jsonl(args.index), args.query, args.limit)
     if args.command == "task-search":
         return core.related_tasks(core.read_jsonl(args.index), args.query, args.limit, args.matches_per_task)
+    if args.command == "packet":
+        return core.build_packet(
+            core.read_jsonl(args.index),
+            args.task,
+            args.role,
+            args.owned_path,
+            args.limit,
+            args.task_limit,
+            args.matches_per_task,
+        )
     if args.command == "check":
         return core.check_staleness(args.project, args.index, args.root)
     if args.command == "start":
