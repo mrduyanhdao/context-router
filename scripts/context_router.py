@@ -326,6 +326,85 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+_TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+_TASK_SCAFFOLDS = {
+    "spec.md": "# Spec: {task_id}\n\n## Behavior\n\n## Boundaries\n\n## Acceptance\n\n",
+    "plan.md": "# Plan: {task_id}\n\n## Increments\n\n## Ownership\n\n## Evidence\n\n",
+    "evidence.md": "# Evidence: {task_id}\n\n## Commands\n\n## Results\n\n",
+}
+
+_ARCHITECTURE_SCAFFOLD = (
+    "# Architecture\n\nRecord decisions, ownership boundaries and invariants here.\n\n"
+    "## Decisions\n\n## Invariants\n\n"
+)
+
+_SCAN_DIRS = {"tasks", "specs", "plans"}
+
+
+def _scan_prior_tasks(project: Path) -> list[str]:
+    found: set[str] = set()
+    for path in sorted(project.rglob("*")):
+        if not path.is_dir() or path.is_symlink() or path.name not in _SCAN_DIRS:
+            continue
+        if path.name == "tasks":
+            found.update(
+                child.relative_to(project).as_posix()
+                for child in sorted(path.iterdir())
+                if child.is_dir() and not child.is_symlink()
+            )
+        else:
+            found.update(
+                child.relative_to(project).as_posix()
+                for child in sorted(path.glob("*.md"))
+                if child.is_file() and not child.is_symlink()
+            )
+    return sorted(found)
+
+
+def start_partition(project: Path, task_id: str, index_out: Path | None = None, roots: list[str] | None = None) -> dict:
+    project = project.resolve()
+    if not project.is_dir():
+        raise ValueError(f"Not a project directory: {project}")
+    if not task_id or not _TASK_ID.fullmatch(task_id):
+        raise ValueError(f"Unsafe task id: {task_id!r}")
+    created: list[str] = []
+    skipped: list[str] = []
+    task_dir = project / "tasks" / task_id
+    for name, template in _TASK_SCAFFOLDS.items():
+        path = task_dir / name
+        if path.exists():
+            skipped.append(path.relative_to(project).as_posix())
+            continue
+        task_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(template.format(task_id=task_id), encoding="utf-8")
+        created.append(path.relative_to(project).as_posix())
+    architecture = project / "architecture" / "README.md"
+    if architecture.exists():
+        skipped.append(architecture.relative_to(project).as_posix())
+    else:
+        architecture.parent.mkdir(parents=True, exist_ok=True)
+        architecture.write_text(_ARCHITECTURE_SCAFFOLD, encoding="utf-8")
+        created.append(architecture.relative_to(project).as_posix())
+    guidance = [
+        "Partition still-binding prior-task facts (decisions, failed approaches, migration constraints, unfinished acceptance criteria) into the new task artifacts; record which prior task supplied each fact.",
+        f"Record architectural decisions and invariants in {architecture.relative_to(project).as_posix()}; current instructions and live code stay authoritative over history.",
+        "Run task-search before loading non-kernel documents; open only the exact supporting sections.",
+    ]
+    index_report = None
+    if index_out is not None:
+        records = build_index(project, roots)
+        write_jsonl(index_out, records)
+        index_report = {"index": str(index_out), "chunks": len(records), "files": len({r["path"] for r in records})}
+    return {
+        "created": created,
+        "skipped": skipped,
+        "existing_prior_tasks": _scan_prior_tasks(project),
+        "guidance": guidance,
+        "index": index_report,
+    }
+
+
 def _terms(value: str) -> set[str]:
     return {term for term in TOKEN.findall(value.lower()) if len(term) > 1 and term not in STOP_WORDS}
 

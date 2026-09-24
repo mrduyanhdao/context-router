@@ -77,6 +77,39 @@ class ContextRouterTests(unittest.TestCase):
                 cli.main(["search", "--index", str(self.project / "i.jsonl"), "--query", "x"]), 2
             )
 
+    def test_start_scaffolds_task_partition_without_overwriting(self):
+        report = router.start_partition(self.project, "2026-09-23-shop-fix")
+        created = {Path(p).as_posix() for p in report["created"]}
+        self.assertIn("tasks/2026-09-23-shop-fix/spec.md", created)
+        self.assertIn("tasks/2026-09-23-shop-fix/plan.md", created)
+        self.assertIn("tasks/2026-09-23-shop-fix/evidence.md", created)
+        self.assertIn("architecture/README.md", created)
+        self.assertTrue(report["guidance"])
+        self.assertEqual(report["skipped"], [])
+        second = router.start_partition(self.project, "2026-09-23-shop-fix")
+        self.assertEqual(set(second["created"]), set())
+        self.assertEqual(len(second["skipped"]), 4)
+
+    def test_start_rejects_unsafe_task_id(self):
+        for bad in ("../escape", "a/b", "", "."):
+            with self.assertRaises(ValueError):
+                router.start_partition(self.project, bad)
+
+    def test_start_scans_existing_prior_task_records(self):
+        (self.project / "specs").mkdir()
+        (self.project / "specs/old-thing-design.md").write_text("# Old\n")
+        (self.project / "docs/superpowers/plans").mkdir(parents=True)
+        (self.project / "docs/superpowers/plans/2026-08-01-x.md").write_text("# P\n")
+        report = router.start_partition(self.project, "new-task")
+        self.assertIn("specs/old-thing-design.md", report["existing_prior_tasks"])
+        self.assertIn("docs/superpowers/plans/2026-08-01-x.md", report["existing_prior_tasks"])
+        self.assertIn("know-how/tasks/2026-09-01-shop-cancellation", report["existing_prior_tasks"])
+
+    def test_start_with_index_builds_loadable_index(self):
+        out = self.project / "private-index.jsonl"
+        report = router.start_partition(self.project, "idx-task", index_out=out)
+        self.assertEqual(report["index"]["chunks"], len(router.read_jsonl(out)))
+
     def test_kind_mapping_is_unambiguous(self):
         kinds = {
             "data.json": router._kind(Path("data.json")),

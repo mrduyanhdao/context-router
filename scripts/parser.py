@@ -2,6 +2,7 @@
 """Argument parsing and dispatch for the context-router CLI."""
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -64,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Explicitly consent to sending shortlisted project context to TypeSafe",
     )
+
+    start = subparsers.add_parser(
+        "start", parents=[env_parent], help="Scaffold the task partition and report prior-task records"
+    )
+    start.add_argument("--project", type=Path, required=True)
+    start.add_argument("--task-id", default=datetime.date.today().isoformat() + "-untitled")
+    start.add_argument("--index", type=Path)
+    start.add_argument("--root", action="append")
     return parser
 
 
@@ -76,6 +85,8 @@ def _dispatch(args) -> object:
         return core.search(core.read_jsonl(args.index), args.query, args.limit)
     if args.command == "task-search":
         return core.related_tasks(core.read_jsonl(args.index), args.query, args.limit, args.matches_per_task)
+    if args.command == "start":
+        return core.start_partition(args.project, args.task_id, args.index, args.root)
     return shadow.shadow(
         core.read_jsonl(args.index),
         args.task,
