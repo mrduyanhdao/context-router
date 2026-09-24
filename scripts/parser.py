@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -90,6 +91,14 @@ def _dispatch(args) -> object:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    env_path = args.env if getattr(args, "env", None) else Path(".env")
+    if env_path.is_file():
+        for key, value in core.load_env_file(env_path).items():
+            os.environ.setdefault(key, value)
+    toggle = os.environ.get("CONTEXT_ROUTER_JEV", "1")
+    if toggle not in {"0", "1"}:
+        print("context-router: CONTEXT_ROUTER_JEV must be 0 or 1", file=sys.stderr)
+        return 2
     try:
         result = _dispatch(args)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

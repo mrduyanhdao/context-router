@@ -169,6 +169,8 @@ def shadow(
     task_records_only: bool = False,
 ) -> list[dict]:
     owned_paths = owned_paths or []
+    if os.environ.get("CONTEXT_ROUTER_JEV", "1") == "0":
+        raise RuntimeError("remote Jev disabled by CONTEXT_ROUTER_JEV=0")
     cache_records = read_jsonl(cache_path) if cache_path.exists() else []
     cache = {}
     for record in cache_records:

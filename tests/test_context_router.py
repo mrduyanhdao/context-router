@@ -49,6 +49,34 @@ class ContextRouterTests(unittest.TestCase):
             "# Shop cancellation\n\nPreserve remaining service uses and verify the cancel path.\n"
         )
 
+    def test_load_env_file_parses_ignoring_comments_and_blank_lines(self):
+        env_file = self.project / ".env"
+        env_file.write_text("# comment\n\nTYPESAFE_API_KEY=abc123\nCONTEXT_ROUTER_JEV=0\nQUOTED=\"x y\"\n")
+        values = router.load_env_file(env_file)
+        self.assertEqual(values, {"TYPESAFE_API_KEY": "abc123", "CONTEXT_ROUTER_JEV": "0", "QUOTED": "x y"})
+
+    def test_load_env_file_rejects_malformed_lines(self):
+        env_file = self.project / ".env"
+        env_file.write_text("GOOD=1\nNOT_A_PAIR\n")
+        with self.assertRaisesRegex(ValueError, "Malformed"):
+            router.load_env_file(env_file)
+
+    def test_jev_kill_switch_blocks_shadow_even_with_key_and_consent(self):
+        records = router.build_index(self.project, chunk_lines=10)
+        opener = mock.Mock()
+        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret", "CONTEXT_ROUTER_JEV": "0"}), mock.patch.object(
+            shadow.urllib.request, "build_opener", return_value=opener
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CONTEXT_ROUTER_JEV=0"):
+                shadow.shadow(records, "shop cancellation", "tdd", self.project / "cache.jsonl", limit=1)
+        opener.open.assert_not_called()
+
+    def test_parser_rejects_invalid_jev_toggle(self):
+        with mock.patch.dict(os.environ, {"CONTEXT_ROUTER_JEV": "maybe"}):
+            self.assertEqual(
+                cli.main(["search", "--index", str(self.project / "i.jsonl"), "--query", "x"]), 2
+            )
+
     def test_kind_mapping_is_unambiguous(self):
         kinds = {
             "data.json": router._kind(Path("data.json")),

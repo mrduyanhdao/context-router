@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 
 # Private router artifacts — never commit these.
+.env
 *-index.jsonl
 *-cache.jsonl
 shadow-cache*.jsonl

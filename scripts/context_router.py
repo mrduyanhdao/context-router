@@ -307,6 +307,25 @@ def read_jsonl(path: Path) -> list[dict]:
     return records
 
 
+_ENV_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ENV_LINE.match(line)
+        if not match:
+            raise ValueError(f"Malformed .env entry at {path}:{line_no}")
+        key, value = match.group(1), match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
 def _terms(value: str) -> set[str]:
     return {term for term in TOKEN.findall(value.lower()) if len(term) > 1 and term not in STOP_WORDS}
 
