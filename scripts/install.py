@@ -20,22 +20,26 @@ description: Find task-specific repository context locally; add --jev only for a
 agent: build
 ---
 
-Load the `context-router` skill. For `$ARGUMENTS`, build a deterministic local index, search it, and run
-`task-search` for related prior task/spec/plan/evidence records. Use only necessary task facets and exact
-prior-task facts, while retaining authoritative repository instructions and live evidence.
-Do not send content to TypeSafe unless `$ARGUMENTS` includes `--jev`, the shortlist has been reviewed, and
-the router invocation includes `--allow-remote`. Report candidate paths, local reasons, and any privacy or
-fallback decision before proceeding.
+Load the `context-router` skill. For `$ARGUMENTS`, build a deterministic local index, search it, run
+`task-search` for related prior task/spec/plan/evidence records, and assemble the worker packet with
+`packet`; use `start` to scaffold the task partition and `check` to keep the index fresh. Use only
+necessary task facets and exact prior-task facts, while retaining authoritative repository instructions
+and live evidence. Do not send content to TypeSafe unless `$ARGUMENTS` includes `--jev`, the shortlist
+has been reviewed, and the router invocation includes `--allow-remote` (a key may come from `.env`;
+`CONTEXT_ROUTER_JEV=0` hard-disables remote scoring). Report candidate paths, local reasons, and any
+privacy or fallback decision before proceeding.
 """
 CLAUDE_COMMAND = """---
 description: Find task-specific repository context locally; add --jev only for approved remote shadow scoring
 ---
 
-Load the `context-router` skill. For `$ARGUMENTS`, build a deterministic local index, search it, and run
-`task-search` for related prior task/spec/plan/evidence records. Retain authoritative repository instructions
-and live evidence. Do not send content to TypeSafe unless
+Load the `context-router` skill. For `$ARGUMENTS`, build a deterministic local index, search it, run
+`task-search` for related prior task/spec/plan/evidence records, assemble the worker packet with
+`packet`, and keep the index fresh with `check`; `start` scaffolds the task partition. Retain
+authoritative repository instructions and live evidence. Do not send content to TypeSafe unless
 `$ARGUMENTS` includes `--jev`, the shortlist is reviewed, and the router invocation includes
-`--allow-remote`. Report candidate paths, local reasons, and any privacy or fallback decision.
+`--allow-remote` (a key may be supplied by `.env`; `CONTEXT_ROUTER_JEV=0` hard-disables remote
+scoring). Report candidate paths, local reasons, and any privacy or fallback decision.
 """
 
 

@@ -99,6 +99,12 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.project / "CLAUDE.md").exists())
         self.assertTrue((self.project / ".claude/skills/context-router/SKILL.md").is_file())
 
+    def test_install_copies_all_script_modules(self):
+        installer.apply_plan(self.project, installer.build_plan(self.project, ["codex"]))
+        scripts = self.project / ".agents/skills/context-router/scripts"
+        for name in ("context_router.py", "shadow.py", "parser.py"):
+            self.assertTrue((scripts / name).is_file())
+
     def test_source_skill_symlink_is_rejected(self):
         bundle = self.root / "bundle"
         bundle.mkdir()
