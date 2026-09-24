@@ -1,18 +1,18 @@
-import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
-SPEC = importlib.util.spec_from_file_location(
-    "context_router",
-    Path(__file__).resolve().parents[1] / "scripts/context_router.py",
-)
-router = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(router)
+import context_router as router
+import shadow
+import parser as cli
 
 
 class FakeResponse:
@@ -48,6 +48,131 @@ class ContextRouterTests(unittest.TestCase):
         (self.project / "know-how/tasks/2026-09-01-shop-cancellation/plan.md").write_text(
             "# Shop cancellation\n\nPreserve remaining service uses and verify the cancel path.\n"
         )
+
+    def test_load_env_file_parses_ignoring_comments_and_blank_lines(self):
+        env_file = self.project / ".env"
+        env_file.write_text("# comment\n\nTYPESAFE_API_KEY=abc123\nCONTEXT_ROUTER_JEV=0\nQUOTED=\"x y\"\n")
+        values = router.load_env_file(env_file)
+        self.assertEqual(values, {"TYPESAFE_API_KEY": "abc123", "CONTEXT_ROUTER_JEV": "0", "QUOTED": "x y"})
+
+    def test_load_env_file_rejects_malformed_lines(self):
+        env_file = self.project / ".env"
+        env_file.write_text("GOOD=1\nNOT_A_PAIR\n")
+        with self.assertRaisesRegex(ValueError, "Malformed"):
+            router.load_env_file(env_file)
+
+    def test_jev_kill_switch_blocks_shadow_even_with_key_and_consent(self):
+        records = router.build_index(self.project, chunk_lines=10)
+        opener = mock.Mock()
+        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret", "CONTEXT_ROUTER_JEV": "0"}), mock.patch.object(
+            shadow.urllib.request, "build_opener", return_value=opener
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CONTEXT_ROUTER_JEV=0"):
+                shadow.shadow(records, "shop cancellation", "tdd", self.project / "cache.jsonl", limit=1)
+        opener.open.assert_not_called()
+
+    def test_parser_rejects_invalid_jev_toggle(self):
+        with mock.patch.dict(os.environ, {"CONTEXT_ROUTER_JEV": "maybe"}):
+            self.assertEqual(
+                cli.main(["search", "--index", str(self.project / "i.jsonl"), "--query", "x"]), 2
+            )
+
+    def test_start_scaffolds_task_partition_without_overwriting(self):
+        report = router.start_partition(self.project, "2026-09-23-shop-fix")
+        created = {Path(p).as_posix() for p in report["created"]}
+        self.assertIn("tasks/2026-09-23-shop-fix/spec.md", created)
+        self.assertIn("tasks/2026-09-23-shop-fix/plan.md", created)
+        self.assertIn("tasks/2026-09-23-shop-fix/evidence.md", created)
+        self.assertIn("architecture/README.md", created)
+        self.assertTrue(report["guidance"])
+        self.assertEqual(report["skipped"], [])
+        second = router.start_partition(self.project, "2026-09-23-shop-fix")
+        self.assertEqual(set(second["created"]), set())
+        self.assertEqual(len(second["skipped"]), 4)
+
+    def test_start_rejects_unsafe_task_id(self):
+        for bad in ("../escape", "a/b", "", "."):
+            with self.assertRaises(ValueError):
+                router.start_partition(self.project, bad)
+
+    def test_start_scans_existing_prior_task_records(self):
+        (self.project / "specs").mkdir()
+        (self.project / "specs/old-thing-design.md").write_text("# Old\n")
+        (self.project / "docs/superpowers/plans").mkdir(parents=True)
+        (self.project / "docs/superpowers/plans/2026-08-01-x.md").write_text("# P\n")
+        report = router.start_partition(self.project, "new-task")
+        self.assertIn("specs/old-thing-design.md", report["existing_prior_tasks"])
+        self.assertIn("docs/superpowers/plans/2026-08-01-x.md", report["existing_prior_tasks"])
+        self.assertIn("know-how/tasks/2026-09-01-shop-cancellation", report["existing_prior_tasks"])
+
+    def test_start_with_index_builds_loadable_index(self):
+        out = self.project / "private-index.jsonl"
+        report = router.start_partition(self.project, "idx-task", index_out=out)
+        self.assertEqual(report["index"]["chunks"], len(router.read_jsonl(out)))
+
+    def test_check_detects_added_changed_removed_and_fresh(self):
+        out = self.project / "private-index.jsonl"
+        router.write_jsonl(out, router.build_index(self.project, chunk_lines=10))
+        fresh = router.check_staleness(self.project, out)
+        self.assertFalse(fresh["stale"])
+        self.assertEqual((fresh["added"], fresh["removed"], fresh["changed"]), ([], [], []))
+        (self.project / "survivor/shop/service.gd").write_text("extends Node\n\nfunc cancel_service():\n    remaining_uses = 0\n")
+        new_file = self.project / "know-how/NEW.md"
+        new_file.write_text("# New\n")
+        (self.project / "know-how/ARCHITECTURE.md").unlink()
+        report = router.check_staleness(self.project, out)
+        self.assertTrue(report["stale"])
+        self.assertIn("know-how/NEW.md", report["added"])
+        self.assertIn("know-how/ARCHITECTURE.md", report["removed"])
+        self.assertIn("survivor/shop/service.gd", report["changed"])
+
+    def test_check_with_empty_index_reports_everything_added(self):
+        out = self.project / "empty.jsonl"
+        out.write_text("")
+        report = router.check_staleness(self.project, out)
+        self.assertTrue(report["stale"])
+        self.assertEqual(report["indexed_files"], 0)
+        self.assertTrue(report["added"])
+
+    def test_packet_assembles_facets_and_prior_tasks_without_network(self):
+        records = router.build_index(self.project, chunk_lines=10)
+        packet = router.build_packet(records, "shop cancellation service use", "tdd", ["survivor/shop"])
+        self.assertEqual(packet["task"], "shop cancellation service use")
+        self.assertEqual(packet["role"], "tdd")
+        self.assertEqual(packet["owned_paths"], ["survivor/shop"])
+        self.assertEqual(packet["acceptance"], [])
+        self.assertTrue(packet["facets"])
+        facet = packet["facets"][0]
+        self.assertEqual(set(facet), {"path", "heading", "line_start", "line_end", "score", "reasons"})
+        self.assertTrue(packet["prior_tasks"])
+        self.assertEqual(packet["prior_tasks"][0]["task_id"], "2026-09-01-shop-cancellation")
+        self.assertNotIn("text", packet["facets"][0])
+        self.assertIn("provenance", packet["provenance_note"].lower())
+
+    def test_packet_on_empty_index_returns_empty_sections(self):
+        packet = router.build_packet([], "anything")
+        self.assertEqual(packet["facets"], [])
+        self.assertEqual(packet["prior_tasks"], [])
+
+    def test_kind_mapping_is_unambiguous(self):
+        kinds = {
+            "data.json": router._kind(Path("data.json")),
+            "data.jsonc": router._kind(Path("data.jsonc")),
+            "conf.yaml": router._kind(Path("conf.yaml")),
+            "scene.tscn": router._kind(Path("scene.tscn")),
+            "main.gd": router._kind(Path("main.gd")),
+            "notes.md": router._kind(Path("notes.md")),
+            "package.json": router._kind(Path("package.json")),
+        }
+        self.assertEqual(kinds, {
+            "data.json": "data",
+            "data.jsonc": "data",
+            "conf.yaml": "configuration",
+            "scene.tscn": "configuration",
+            "main.gd": "code",
+            "notes.md": "markdown",
+            "package.json": "configuration",
+        })
 
     def test_index_is_stable_and_search_explains_matches(self):
         first = router.build_index(self.project, chunk_lines=10)
@@ -95,15 +220,15 @@ class ContextRouterTests(unittest.TestCase):
         cache = self.project / "shadow-cache.jsonl"
         answers = {
             name: {"type": "noul", "noul": 0.9 if name in {"relevant", "needed_before_action"} else 0.1}
-            for name in router.QUESTIONS
+            for name in shadow.QUESTIONS
         }
-        body = {"model": router.MODEL, "answers": answers}
+        body = {"model": shadow.MODEL, "answers": answers}
         opener = mock.Mock()
         opener.open.return_value = FakeResponse(body)
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "secret"}), mock.patch.object(
-            router.urllib.request, "build_opener", return_value=opener
+            shadow.urllib.request, "build_opener", return_value=opener
         ):
-            result = router.shadow(records, "shop cancellation service use", "tdd", cache, limit=1)
+            result = shadow.shadow(records, "shop cancellation service use", "tdd", cache, limit=1)
         self.assertEqual(opener.open.call_count, 1)
         request = opener.open.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer secret")
@@ -116,27 +241,27 @@ class ContextRouterTests(unittest.TestCase):
         records = router.build_index(self.project, chunk_lines=10)
         candidate = router.search(records, "shop cancellation service use", 1)[0]
         task = "shop cancellation service use"
-        key = router._cache_key(router.MODEL, task, "tdd", [], candidate)
+        key = shadow._cache_key(shadow.MODEL, task, "tdd", [], candidate)
         evaluation = {
-            "model": router.MODEL,
-            "answers": {name: 0.1 for name in router.QUESTIONS},
+            "model": shadow.MODEL,
+            "answers": {name: 0.1 for name in shadow.QUESTIONS},
         }
         cache = self.project / "shadow-cache.jsonl"
         router.write_jsonl(cache, [{"cache_key": key, "evaluation": evaluation}])
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
-            router.urllib.request, "build_opener"
+            shadow.urllib.request, "build_opener"
         ) as opened:
-            result = router.shadow(records, task, "tdd", cache, limit=1)
+            result = shadow.shadow(records, task, "tdd", cache, limit=1)
         opened.assert_not_called()
         self.assertTrue(result[0]["cached"])
 
     def test_uncached_shadow_without_key_fails_before_network(self):
         records = router.build_index(self.project, chunk_lines=10)
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
-            router.urllib.request, "build_opener"
+            shadow.urllib.request, "build_opener"
         ) as opened:
             with self.assertRaisesRegex(RuntimeError, "TYPESAFE_API_KEY"):
-                router.shadow(records, "shop cancellation", "tdd", self.project / "cache.jsonl", limit=1)
+                shadow.shadow(records, "shop cancellation", "tdd", self.project / "cache.jsonl", limit=1)
         opened.assert_not_called()
 
     def test_secure_writer_does_not_follow_predictable_temp_symlink(self):
@@ -166,32 +291,32 @@ class ContextRouterTests(unittest.TestCase):
 
     def test_api_model_mismatch_and_malformed_response_are_rejected(self):
         candidate = router.search(router.build_index(self.project, chunk_lines=10), "shop service", 1)[0]
-        answers = {name: {"type": "noul", "noul": 0.5} for name in router.QUESTIONS}
+        answers = {name: {"type": "noul", "noul": 0.5} for name in shadow.QUESTIONS}
         opener = mock.Mock()
         opener.open.return_value = FakeResponse({"model": "jev-other", "answers": answers})
-        with mock.patch.object(router.urllib.request, "build_opener", return_value=opener):
+        with mock.patch.object(shadow.urllib.request, "build_opener", return_value=opener):
             with self.assertRaisesRegex(RuntimeError, "unexpected model"):
-                router._ask_jev("shop", "tdd", [], candidate, router.MODEL, "secret", 1)
-        opener.open.return_value = FakeResponse({"model": router.MODEL, "answers": []})
-        with mock.patch.object(router.urllib.request, "build_opener", return_value=opener):
+                shadow._ask_jev("shop", "tdd", [], candidate, shadow.MODEL, "secret", 1)
+        opener.open.return_value = FakeResponse({"model": shadow.MODEL, "answers": []})
+        with mock.patch.object(shadow.urllib.request, "build_opener", return_value=opener):
             with self.assertRaisesRegex(RuntimeError, "malformed"):
-                router._ask_jev("shop", "tdd", [], candidate, router.MODEL, "secret", 1)
+                shadow._ask_jev("shop", "tdd", [], candidate, shadow.MODEL, "secret", 1)
 
     def test_malformed_cache_is_rejected_cleanly(self):
         cache = self.project / "cache.jsonl"
         cache.write_text('[]\n')
         with self.assertRaisesRegex(ValueError, "JSON object"):
-            router.shadow([], "shop", "tdd", cache)
+            shadow.shadow([], "shop", "tdd", cache)
         cache.write_text('{"cache_key":"x","evaluation":{"model":"jev-1.13.0","answers":{}}}\n')
         with self.assertRaisesRegex(ValueError, "invalid relevant"):
-            router.shadow([], "shop", "tdd", cache)
+            shadow.shadow([], "shop", "tdd", cache)
 
     def test_shadow_cli_requires_explicit_remote_consent(self):
         with self.assertRaises(SystemExit):
-            router._parser().parse_args(
+            cli.build_parser().parse_args(
                 ["shadow", "--index", "i", "--task", "t", "--cache", "c"]
             )
-        args = router._parser().parse_args(
+        args = cli.build_parser().parse_args(
             ["shadow", "--index", "i", "--task", "t", "--cache", "c", "--allow-remote"]
         )
         self.assertTrue(args.allow_remote)
@@ -199,7 +324,7 @@ class ContextRouterTests(unittest.TestCase):
     def test_cache_model_mismatch_is_rejected(self):
         records = router.build_index(self.project, chunk_lines=10)
         candidate = router.search(records, "shop service", 1)[0]
-        key = router._cache_key(router.MODEL, "shop service", "tdd", [], candidate)
+        key = shadow._cache_key(shadow.MODEL, "shop service", "tdd", [], candidate)
         cache = self.project / "cache.jsonl"
         router.write_jsonl(
             cache,
@@ -207,12 +332,12 @@ class ContextRouterTests(unittest.TestCase):
                 "cache_key": key,
                 "evaluation": {
                     "model": "jev-other",
-                    "answers": {name: 0.1 for name in router.QUESTIONS},
+                    "answers": {name: 0.1 for name in shadow.QUESTIONS},
                 },
             }],
         )
         with self.assertRaisesRegex(ValueError, "expected"):
-            router.shadow(records, "shop service", "tdd", cache, limit=1)
+            shadow.shadow(records, "shop service", "tdd", cache, limit=1)
 
     def test_malformed_heading_is_rejected_cleanly(self):
         records = router.build_index(self.project, chunk_lines=10)
@@ -223,13 +348,13 @@ class ContextRouterTests(unittest.TestCase):
     def test_remote_opener_disables_redirects(self):
         candidate = router.search(router.build_index(self.project, chunk_lines=10), "shop service", 1)[0]
         opener = mock.Mock()
-        opener.open.side_effect = router.urllib.error.HTTPError(
-            router.ENDPOINT, 302, "Found", {}, None
+        opener.open.side_effect = shadow.urllib.error.HTTPError(
+            shadow.ENDPOINT, 302, "Found", {}, None
         )
-        with mock.patch.object(router.urllib.request, "build_opener", return_value=opener) as built:
+        with mock.patch.object(shadow.urllib.request, "build_opener", return_value=opener) as built:
             with self.assertRaisesRegex(RuntimeError, "HTTP 302"):
-                router._ask_jev("shop", "tdd", [], candidate, router.MODEL, "secret", 1)
-        self.assertIsInstance(built.call_args.args[0], router._NoRedirectHandler)
+                shadow._ask_jev("shop", "tdd", [], candidate, shadow.MODEL, "secret", 1)
+        self.assertIsInstance(built.call_args.args[0], shadow._NoRedirectHandler)
 
 
 if __name__ == "__main__":
