@@ -14,9 +14,12 @@ privacy boundary, the runbook owns the sequence.
    python3 <skill-path>/scripts/context_router.py search --index <private-index.jsonl> --query "<task summary>"
    python3 <skill-path>/scripts/context_router.py task-search --index <private-index.jsonl> --query "<task summary>"
    ```
-   These are deterministic and offline. `check --project . --index <private-index.jsonl>`
-   reports staleness (`added`/`removed`/`changed`) when the tree may have moved
-   since the index was built.
+   These are deterministic and offline. When the tree may have moved since the
+   index was built, verify first:
+   ```sh
+   python3 <skill-path>/scripts/context_router.py check --project . --index <private-index.jsonl>
+   ```
+   `check` reports staleness as `added`/`removed`/`changed` paths.
 3. **Assemble the packet.**
    ```sh
    python3 <skill-path>/scripts/context_router.py packet --index <private-index.jsonl> --task "<task>" --role <role> --owned-path <dir>
